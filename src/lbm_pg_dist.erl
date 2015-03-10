@@ -55,7 +55,7 @@
 %% Returns a list of all members for the group with name `Name'.
 
 -callback add_waiting(atom(), lbm_pg:name(), [#lbm_pg_member{}]) ->
-    {ok, reference()}.
+    {ok, reference() | [#lbm_pg_member{}]}.
 %% Add a process to the processes waiting for members of a specific group.
 %% The process may report bad members along with the registration. The
 %% process will receive a message of the form
@@ -103,7 +103,8 @@ members(Group) -> ?BACKEND:members(?MODULE, Group).
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
--spec add_waiting(lbm_pg:name(), [#lbm_pg_member{}]) -> {ok, reference()}.
+-spec add_waiting(lbm_pg:name(), [#lbm_pg_member{}]) ->
+                         {ok, reference() | [#lbm_pg_member{}]}.
 add_waiting(Group, BadMembers) ->
     ?BACKEND:add_waiting(?MODULE, Group, BadMembers).
 

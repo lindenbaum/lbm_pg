@@ -22,7 +22,7 @@
 -ifndef(lbm_pg_hrl_).
 -define(lbm_pg_hrl_, 1).
 
--record(lbm_pg_member, {b :: lbm_pg:backend(), p :: pid()}).
+-record(lbm_pg_member, {b :: lbm_pg:backend() | '_', p :: pid() | '_' | '$1'}).
 
 -define(UPDATE_MSG(Ref, Name, Members), {lbm_pg, Ref, Name, Members}).
 

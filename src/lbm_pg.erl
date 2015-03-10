@@ -139,7 +139,7 @@ sync(Group, Message) -> sync(Group, Message, 5000).
 %% Similar to {@link sync/4} with `Options' set to `[]'.
 %% @end
 %%------------------------------------------------------------------------------
--spec sync(name(), term(), timeout()) -> any().
+-spec sync(name(), term(), timeout() | infinity) -> any().
 sync(Group, Message, Timeout) -> sync(Group, Message, Timeout, []).
 
 %%------------------------------------------------------------------------------
@@ -147,7 +147,7 @@ sync(Group, Message, Timeout) -> sync(Group, Message, Timeout, []).
 %% TODO
 %% @end
 %%------------------------------------------------------------------------------
--spec sync(name(), term(), timeout(), [sync_option()]) -> any().
+-spec sync(name(), term(), timeout() | infinity, [sync_option()]) -> any().
 sync(Group, Message, Timeout, Options) ->
     Args = {Group, Message, Timeout, Options},
     sync_loop(get_members(Group, Options), [], Args, Timeout).
@@ -352,6 +352,8 @@ apply_sync(#lbm_pg_member{b = gen_fsm, p = Pid}, Msg, Timeout) ->
 %% @private
 %% Calculate the remaining value for `Timeout' given a start timestamp.
 %%------------------------------------------------------------------------------
+remaining_millis(infinity, _StartTimestamp) ->
+    infinity;
 remaining_millis(Timeout, StartTimestamp) ->
     Timeout - (to_millis(os:timestamp()) - to_millis(StartTimestamp)).
 
