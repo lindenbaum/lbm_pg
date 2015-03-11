@@ -18,6 +18,7 @@
 %%% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 %%%
 %%% @doc
+%%% TODO
 %%% @end
 %%%=============================================================================
 
@@ -34,9 +35,9 @@
          unjoin/1,
          unjoin/2,
          members/1,
-         sync/2,
-         sync/3,
-         sync/4,
+         sync_send/2,
+         sync_send/3,
+         sync_send/4,
          info/0]).
 
 %% Application callbacks
@@ -47,7 +48,7 @@
 
 -type name()             :: any().
 -type backend()          :: gen_server | gen_fsm.
--type sync_option()      :: no_wait | cache.
+-type sync_option()      :: no_wait | no_cache.
 
 -export_type([name/0, backend/0, sync_option/0]).
 
@@ -128,29 +129,29 @@ members(Group) -> lbm_pg_dist:members(Group).
 
 %%------------------------------------------------------------------------------
 %% @doc
-%% Similar to {@link sync/3} with `Timeout' set to `5000'.
+%% Similar to {@link sync_send/3} with `Timeout' set to `5000'.
 %% @end
 %%------------------------------------------------------------------------------
--spec sync(name(), term()) -> any().
-sync(Group, Message) -> sync(Group, Message, 5000).
+-spec sync_send(name(), term()) -> any().
+sync_send(Group, Message) -> sync_send(Group, Message, 5000).
 
 %%------------------------------------------------------------------------------
 %% @doc
-%% Similar to {@link sync/4} with `Options' set to `[]'.
+%% Similar to {@link sync_send/4} with `Options' set to `[]'.
 %% @end
 %%------------------------------------------------------------------------------
--spec sync(name(), term(), timeout() | infinity) -> any().
-sync(Group, Message, Timeout) -> sync(Group, Message, Timeout, []).
+-spec sync_send(name(), term(), timeout()) -> any().
+sync_send(Group, Message, Timeout) -> sync_send(Group, Message, Timeout, []).
 
 %%------------------------------------------------------------------------------
 %% @doc
 %% TODO
 %% @end
 %%------------------------------------------------------------------------------
--spec sync(name(), term(), timeout() | infinity, [sync_option()]) -> any().
-sync(Group, Message, Timeout, Options) ->
+-spec sync_send(name(), term(), timeout(), [sync_option()]) -> any().
+sync_send(Group, Message, Timeout, Options) ->
     Args = {Group, Message, Timeout, Options},
-    sync_loop(get_members(Group, Options), [], Args, Timeout).
+    sync_send_loop(get_members(Group, Options), [], Args, Timeout).
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -207,12 +208,12 @@ get_members(Group, Options) ->
 
 %%------------------------------------------------------------------------------
 %% @private
-%% Try to sync send a message to exactly one subscriber. If no good subscribers
-%% can be found, the loop will block the caller until either new members join
+%% Try to sync send a message to exactly one member. If no valid members can be
+%% found, the loop will block the caller until either new members join
 %% and handle the message or the given timeout expires (unless the `no_wait'
 %% option is specified).
 %%------------------------------------------------------------------------------
-sync_loop([], BadMs, Args = {Group, _, _, Opts}, Timeout) ->
+sync_send_loop([], BadMs, Args = {Group, _, _, Opts}, Timeout) ->
     ok = exit_if_no_wait(Opts, Args),
     StartTimestamp = os:timestamp(),
     case lbm_pg_dist:add_waiting(Group, BadMs) of
@@ -221,15 +222,15 @@ sync_loop([], BadMs, Args = {Group, _, _, Opts}, Timeout) ->
             NewTimeout = remaining_millis(Timeout, StartTimestamp),
             case wait(Group, SyncRef, NewTimeout, TimerRef) of
                 {ok, {Members, NextTimeout}} ->
-                    sync_loop(Members, [], Args, NextTimeout);
+                    sync_send_loop(Members, [], Args, NextTimeout);
                 {error, timeout} ->
-                    exit({timeout, {?MODULE, sync, tuple_to_list(Args)}})
+                    exit({timeout, {?MODULE, sync_send, tuple_to_list(Args)}})
             end;
         {ok, Members} when is_list(Members) ->
             NewTimeout = remaining_millis(Timeout, StartTimestamp),
-            sync_loop(Members, [], Args, NewTimeout)
+            sync_send_loop(Members, [], Args, NewTimeout)
     end;
-sync_loop([M | Ms], BadMs, Args = {Group, Msg, _, Opts}, Timeout) ->
+sync_send_loop([M | Ms], BadMs, Args = {Group, Msg, _, Opts}, Timeout) ->
     StartTimestamp = os:timestamp(),
     try apply_sync(M, Msg, Timeout) of
         Result ->
@@ -239,10 +240,10 @@ sync_loop([M | Ms], BadMs, Args = {Group, Msg, _, Opts}, Timeout) ->
     catch
         exit:{timeout, _} ->
             %% member is not dead, only overloaded... anyway Timeout is over
-            exit({timeout, {?MODULE, sync, tuple_to_list(Args)}});
+            exit({timeout, {?MODULE, sync_send, tuple_to_list(Args)}});
         _:_  ->
             NewTimeout = remaining_millis(Timeout, StartTimestamp),
-            sync_loop(Ms, [M | BadMs], Args, NewTimeout)
+            sync_send_loop(Ms, [M | BadMs], Args, NewTimeout)
     end.
 
 %%------------------------------------------------------------------------------
@@ -317,7 +318,7 @@ shuffle(L, Len) ->
 exit_if_no_wait(Opts, Args) ->
     case lists:member(no_wait, Opts) of
         true ->
-            exit({no_members, {?MODULE, sync, tuple_to_list(Args)}});
+            exit({no_members, {?MODULE, sync_send, tuple_to_list(Args)}});
         false ->
             ok
     end.
@@ -326,18 +327,18 @@ exit_if_no_wait(Opts, Args) ->
 %% @private
 %%------------------------------------------------------------------------------
 get_chached(Group, Opts) ->
-    case lists:member(cache, Opts) of
-        true  -> get({?MODULE, Group});
-        false -> undefined
+    case lists:member(no_cache, Opts) of
+        false -> get({?MODULE, Group});
+        true  -> undefined
     end.
 
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
 maybe_cache(Group, Member, Opts) ->
-    case lists:member(cache, Opts) of
-        true  -> put({?MODULE, Group}, Member);
-        false -> ok
+    case lists:member(no_cache, Opts) of
+        false -> put({?MODULE, Group}, Member);
+        true  -> ok
     end.
 
 %%------------------------------------------------------------------------------

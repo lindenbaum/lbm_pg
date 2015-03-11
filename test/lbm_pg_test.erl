@@ -49,8 +49,8 @@ all_test_() ->
       fun basic_sync_send/0,
       fun multiple_members/0,
       fun late_join/0,
+      {spawn, fun() -> one_group_many_concurrent_sync_senders_many_messages([no_cache]) end},
       {spawn, fun() -> one_group_many_concurrent_sync_senders_many_messages([]) end},
-      {spawn, fun() -> one_group_many_concurrent_sync_senders_many_messages([cache]) end},
       {spawn, fun one_group_many_concurrent_sync_senders/0},
       {spawn, fun one_group_many_concurrent_sync_senders_members_exit/0},
       {timeout, ?TIMEOUT, {spawn, fun many_groups_many_concurrent_sync_senders/0}},
@@ -67,19 +67,19 @@ basic_join() ->
 
 no_members() ->
     ?assertEqual(0, length(lbm_pg:members(?GROUP))),
-    try lbm_pg:sync(?GROUP, msg, 100) of
+    try lbm_pg:sync_send(?GROUP, msg, 100) of
         _ -> throw(test_failed)
     catch
-        exit:{timeout, {lbm_pg, sync, [?GROUP, msg, 100, []]}} ->
+        exit:{timeout, {lbm_pg, sync_send, [?GROUP, msg, 100, []]}} ->
             ok
     end.
 
 no_members_no_wait() ->
     ?assertEqual(0, length(lbm_pg:members(?GROUP))),
-    try lbm_pg:sync(?GROUP, msg, 100, [no_wait]) of
+    try lbm_pg:sync_send(?GROUP, msg, 100, [no_wait]) of
         _ -> throw(test_failed)
     catch
-        exit:{no_members, {lbm_pg, sync, [?GROUP, msg, 100, [no_wait]]}} ->
+        exit:{no_members, {lbm_pg, sync_send, [?GROUP, msg, 100, [no_wait]]}} ->
             ok
     end.
 
@@ -97,7 +97,7 @@ basic_sync_send() ->
     ?DOWN(SR, S),
     ?DOWN(PR, P),
 
-    {'EXIT', {timeout, _}} = (catch lbm_pg:sync(?GROUP, msg, 100)).
+    {'EXIT', {timeout, _}} = (catch lbm_pg:sync_send(?GROUP, msg, 100)).
 
 multiple_members() ->
     {S1, S1R} = lbm_pg_member:start(?GROUP, 1),
@@ -119,7 +119,7 @@ multiple_members() ->
     ?DOWN(S3R, S3),
     ?DOWN(PR, P),
 
-    {'EXIT', {timeout, _}} = (catch lbm_pg:sync(?GROUP, msg, 100)).
+    {'EXIT', {timeout, _}} = (catch lbm_pg:sync_send(?GROUP, msg, 100)).
 
 late_join() ->
     Messages = 3,
@@ -135,7 +135,7 @@ late_join() ->
     ?DOWN(PR, P),
     ?DOWN(SR, S),
 
-    {'EXIT', {timeout, _}} = (catch lbm_pg:sync(?GROUP, msg, 100)).
+    {'EXIT', {timeout, _}} = (catch lbm_pg:sync_send(?GROUP, msg, 100)).
 
 one_group_many_concurrent_sync_senders_many_messages(Options) ->
     Messages = 100000,
@@ -304,8 +304,11 @@ sender(Group, NumMessages, Options) ->
     fun() ->
             for(NumMessages,
                 fun(Term) ->
-                        Message = lbm_pg_member:message(Term),
-                        ok = lbm_pg:sync(Group, Message, ?TIMEOUT * 1000, Options)
+                        ok = lbm_pg:sync_send(
+                               Group,
+                               lbm_pg_member:message(Term),
+                               ?TIMEOUT * 1000,
+                               Options)
                 end)
     end.
 
