@@ -18,7 +18,13 @@
 %%% OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 %%%
 %%% @doc
-%%% TODO
+%%% Another approach to process groups.
+%%%
+%%% `lbm_pg' offers a process group implementation similar to `pg2' without the
+%%% use of `global' with integrated facilities to (reliably) send messages to
+%%% group members with failover, timeouts, member caching and more.
+%%%
+%%% To see member management details look at the {@link lbm_pg_ets} backend.
 %%% @end
 %%%=============================================================================
 

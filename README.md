@@ -13,6 +13,11 @@ process registry. The distribution backend is similar to `pg2` and thus has the
 same robustness, e.g. when it comes to netsplits. Every process implementing
 either the `gen_server` or `gen_fsm` behaviour can be joined into a group.
 
+More Information
+----------------
+
+For more information look at the comprehensive inline EDoc documentation.
+
 Example
 -------
 
