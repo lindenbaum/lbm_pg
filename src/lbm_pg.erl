@@ -202,8 +202,11 @@ sync_send(Group, Message, Timeout) -> sync_send(Group, Message, Timeout, []).
 %%------------------------------------------------------------------------------
 -spec sync_send(name(), term(), timeout(), [send_option()]) -> any().
 sync_send(Group, Message, Timeout, Options) ->
-    Args = {Group, Message, Timeout, Options},
-    sync_send_loop(get_members(Group, Options), [], Args, Timeout).
+    {Member, Result} = lbm_pg_sync:send(
+                         get_members(Group, Options),
+                         Group, Message, Timeout, Options),
+    maybe_cache(Group, Member, Options),
+    Result.
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -260,103 +263,6 @@ get_members(Group, Options) ->
 
 %%------------------------------------------------------------------------------
 %% @private
-%% Try to sync send a message to exactly one member. If no valid members can be
-%% found, the loop will block the caller until either new members join
-%% and handle the message or the given timeout expires (unless the `no_wait'
-%% option is specified).
-%%------------------------------------------------------------------------------
-sync_send_loop([], BadMs, Args = {Group, _, _, Opts}, Timeout) ->
-    ok = exit_if_no_wait(Opts, Args),
-    StartTimestamp = os:timestamp(),
-    case lbm_pg_dist:add_waiting(Group, BadMs) of
-        {ok, SyncRef} when is_reference(SyncRef) ->
-            TimerRef = send_after(Timeout, Group, SyncRef),
-            NewTimeout = remaining_millis(Timeout, StartTimestamp),
-            case wait(Group, SyncRef, NewTimeout, TimerRef) of
-                {ok, {Members, NextTimeout}} ->
-                    sync_send_loop(Members, [], Args, NextTimeout);
-                {error, timeout} ->
-                    exit({timeout, {?MODULE, sync_send, tuple_to_list(Args)}})
-            end;
-        {ok, Members} when is_list(Members) ->
-            NewTimeout = remaining_millis(Timeout, StartTimestamp),
-            sync_send_loop(Members, [], Args, NewTimeout)
-    end;
-sync_send_loop([M | Ms], BadMs, Args = {Group, Msg, _, Opts}, Timeout) ->
-    StartTimestamp = os:timestamp(),
-    try apply_sync(M, Msg, Timeout) of
-        Result ->
-            ok = lbm_pg_dist:leave(Group, BadMs),
-            maybe_cache(Group, M, Opts),
-            Result
-    catch
-        exit:{timeout, _} ->
-            %% member is not dead, only overloaded... anyway Timeout is over
-            exit({timeout, {?MODULE, sync_send, tuple_to_list(Args)}});
-        _:_  ->
-            NewTimeout = remaining_millis(Timeout, StartTimestamp),
-            sync_send_loop(Ms, [M | BadMs], Args, NewTimeout)
-    end.
-
-%%------------------------------------------------------------------------------
-%% @private
-%% Wait for either a timeout message (created with {@link send_after/3}) or a
-%% member update from {@link lbm_pg_dist}. This will also try to leave the
-%% callers message queue in a consistent state avoiding ghost messages beeing
-%% send to the calling process.
-%%------------------------------------------------------------------------------
-wait(Group, UpdateRef, Timeout, TimerRef) ->
-    receive
-        ?UPDATE_MSG(UpdateRef, Group, timeout) ->
-            ok = lbm_pg_dist:del_waiting(Group, UpdateRef),
-            ok = flush_updates(Group, UpdateRef),
-            {error, timeout};
-        ?UPDATE_MSG(UpdateRef, Group, Subscribers) ->
-            Time = cancel_timer(TimerRef, Timeout, Group, UpdateRef),
-            {ok, {Subscribers, Time}}
-    end.
-
-%%------------------------------------------------------------------------------
-%% @private
-%% Flush all pending update messages from the callers message queue.
-%%------------------------------------------------------------------------------
-flush_updates(Group, UpdateRef) ->
-    receive
-        ?UPDATE_MSG(UpdateRef, Group, _) ->
-            flush_updates(Group, UpdateRef)
-    after
-        50 -> ok
-    end.
-
-%%------------------------------------------------------------------------------
-%% @private
-%% Start a timer for the calling process, does nothing if `Timeout' is set to
-%% infinity.
-%%------------------------------------------------------------------------------
-send_after(Timeout, Group, UpdateRef) when is_integer(Timeout) ->
-    erlang:send_after(Timeout, self(), ?UPDATE_MSG(UpdateRef, Group, timeout));
-send_after(infinity, _Group, _Ref) ->
-    erlang:make_ref().
-
-%%------------------------------------------------------------------------------
-%% @private
-%% Cancel a timer created with {@link send_after/3}. And reports the remaining
-%% time. If the timer already expired the function tries to remove the timeout
-%% message from the process message queue.
-%%------------------------------------------------------------------------------
-cancel_timer(TimerRef, Timeout, Group, UpdateRef) ->
-    case erlang:cancel_timer(TimerRef) of
-        false when is_integer(Timeout) ->
-            %% cleanup the message queue in case timer was already delivered
-            receive ?UPDATE_MSG(UpdateRef, Group, _) -> 0 after 0 -> 0 end;
-        false when Timeout =:= infinity ->
-            Timeout;
-        Time when is_integer(Time) ->
-            Time
-    end.
-
-%%------------------------------------------------------------------------------
-%% @private
 %%------------------------------------------------------------------------------
 shuffle(L) when is_list(L) ->
     shuffle(L, length(L)).
@@ -365,21 +271,9 @@ shuffle(L, Len) ->
 
 %%------------------------------------------------------------------------------
 %% @private
-%% Exits the calling process, if the `no_wait' option is specified.
 %%------------------------------------------------------------------------------
-exit_if_no_wait(Opts, Args) ->
-    case lists:member(no_wait, Opts) of
-        true ->
-            exit({no_members, {?MODULE, sync_send, tuple_to_list(Args)}});
-        false ->
-            ok
-    end.
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-get_chached(Group, Opts) ->
-    case lists:member(no_cache, Opts) of
+get_chached(Group, Options) ->
+    case lists:member(no_cache, Options) of
         false -> get({?MODULE, Group});
         true  -> undefined
     end.
@@ -387,31 +281,8 @@ get_chached(Group, Opts) ->
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-maybe_cache(Group, Member, Opts) ->
-    case lists:member(no_cache, Opts) of
+maybe_cache(Group, Member, Options) ->
+    case lists:member(no_cache, Options) of
         false -> put({?MODULE, Group}, Member);
         true  -> ok
     end.
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-apply_sync(#lbm_pg_member{b = gen_server, p = Pid}, Msg, Timeout) ->
-    gen_server:call(Pid, Msg, Timeout);
-apply_sync(#lbm_pg_member{b = gen_fsm, p = Pid}, Msg, Timeout) ->
-    gen_fsm:sync_send_event(Pid, Msg, Timeout).
-
-%%------------------------------------------------------------------------------
-%% @private
-%% Calculate the remaining value for `Timeout' given a start timestamp.
-%%------------------------------------------------------------------------------
-remaining_millis(infinity, _StartTimestamp) ->
-    infinity;
-remaining_millis(Timeout, StartTimestamp) ->
-    Timeout - (to_millis(os:timestamp()) - to_millis(StartTimestamp)).
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-to_millis({MegaSecs, Secs, MicroSecs}) ->
-    MegaSecs * 1000000000 + Secs * 1000 + MicroSecs div 1000.
