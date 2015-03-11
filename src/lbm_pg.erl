@@ -24,7 +24,7 @@
 %%% use of `global' with integrated facilities to (reliably) send messages to
 %%% group members with failover, timeouts, member caching and more.
 %%%
-%%% To see member management details look at the {@link lbm_pg_ets} backend.
+%%% To see member management details look at the {@link lbm_pg_dist} backend.
 %%% @end
 %%%=============================================================================
 
