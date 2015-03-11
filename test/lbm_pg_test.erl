@@ -53,7 +53,9 @@ all_test_() ->
       {spawn, fun() -> one_group_many_concurrent_sync_senders_many_messages([]) end},
       {spawn, fun one_group_many_concurrent_sync_senders/0},
       {spawn, fun one_group_many_concurrent_sync_senders_members_exit/0},
+      {timeout, ?TIMEOUT, {spawn, fun many_groups_one_sync_sender_per_group/0}},
       {timeout, ?TIMEOUT, {spawn, fun many_groups_many_concurrent_sync_senders/0}},
+      {timeout, ?TIMEOUT, {spawn, fun one_group_limited_concurrent_sync_senders_distributed_setup/0}},
       {timeout, ?TIMEOUT, {spawn, fun one_group_many_concurrent_sync_senders_distributed_setup/0}},
       {timeout, ?TIMEOUT, {spawn, fun many_groups_many_concurrent_sync_senders_distributed_setup/0}}
      ]}.
@@ -188,6 +190,24 @@ one_group_many_concurrent_sync_senders_members_exit() ->
     Time = element(1, timer:tc(Test)),
     report(Messages, 1, Members, Messages, 1, Time).
 
+many_groups_one_sync_sender_per_group() ->
+    Groups = 5000,
+    Messages = 100000,
+    MessagesPerGroup = Messages div Groups,
+    Sender = fun(Group) ->
+                     spawn_monitor(sender(Group, MessagesPerGroup, []))
+             end,
+    Member = fun(Group) ->
+                     lbm_pg_member:start(Group, MessagesPerGroup)
+             end,
+    Test = fun() ->
+                   for(Groups, Member),
+                   for(Groups, Sender),
+                   for(Groups + Groups, ?DOWN_FUN)
+           end,
+    Time = element(1, timer:tc(Test)),
+    report(Messages, Groups, Groups, Groups, 1, Time).
+
 many_groups_many_concurrent_sync_senders() ->
     Groups = 5000,
     Messages = 100000,
@@ -210,6 +230,41 @@ many_groups_many_concurrent_sync_senders() ->
            end,
     Time = element(1, timer:tc(Test)),
     report(Messages, Groups, Groups, Messages, 1, Time).
+
+one_group_limited_concurrent_sync_senders_distributed_setup() ->
+    process_flag(trap_exit, true),
+
+    {ok, Slave1} = slave_setup(slave1),
+    {ok, Slave2} = slave_setup(slave2),
+    {ok, Slave3} = slave_setup(slave3),
+
+    Nodes = [Slave3, Slave2, Slave1, node()],
+    NumNodes = length(Nodes),
+    Messages = 100000,
+    NumSendsPerNode = Messages div NumNodes,
+    Senders = 5000,
+    SendersPerNode = Senders div NumNodes,
+    MessagesPerSender = Messages div Senders,
+
+    Sender = fun(_, Node) ->
+                     spawn_link(Node, sender(?GROUP, MessagesPerSender, []))
+             end,
+    Member = fun(Node) ->
+                     lbm_pg_member:start_link(Node, ?GROUP, NumSendsPerNode)
+             end,
+    Test = fun() ->
+                   S0 = Member(node()),
+                   foreach(
+                     fun(N) ->
+                             for(SendersPerNode, Sender, [N])
+                     end, Nodes),
+
+                   ?EXIT(S0),
+                   foreach(Member, Nodes -- [node()]),
+                   for(Senders + (NumNodes - 1), ?EXIT_FUN)
+           end,
+    Time = element(1, timer:tc(Test)),
+    report(Messages, 1, NumNodes, Senders, NumNodes, Time).
 
 one_group_many_concurrent_sync_senders_distributed_setup() ->
     process_flag(trap_exit, true),

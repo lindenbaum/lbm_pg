@@ -19,8 +19,8 @@
 %%%
 %%% @doc
 %%% An implementation of the {@link lbm_pg_dist} behaviour based on a local
-%%% `ETS' table using global locks to distribute subscriptions. This is quite
-%%% similar to how `pg2' distributes its internal state.
+%%% `ETS' table. This is quite similar to how `pg2' distributes its internal
+%%% state without `global' locks.
 %%%
 %%% The table ?MODULE contains the following terms:
 %%% `{{member, Group, #lbm_pg_member{}}}': a group member
@@ -38,7 +38,7 @@
 %% lbm_pg_dist callbacks
 -export([spec/1,
          join/3,
-         unjoin/3,
+         leave/3,
          members/2,
          add_waiting/3,
          del_waiting/3,
@@ -86,11 +86,11 @@ join(Name, Group, Member = #lbm_pg_member{}) ->
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
--spec unjoin(atom(), lbm_pg:name(), pid() | [#lbm_pg_member{}]) -> ok.
-unjoin(_Name, _Group, []) ->
+-spec leave(atom(), lbm_pg:name(), pid() | [#lbm_pg_member{}]) -> ok.
+leave(_Name, _Group, []) ->
     ok;
-unjoin(Name, Group, BadMembers) ->
-    multi_cast(Name, {leave, Group, BadMembers}).
+leave(Name, Group, BadMembers) ->
+    multi_cast([node() | nodes()], Name, {leave, Group, BadMembers}).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -167,7 +167,7 @@ handle_call({join, Group, Member}, _From, State) ->
             {reply, ok, NewState}
     end;
 handle_call({add_waiting, Group, Pid, BadMembers}, _From, State) ->
-    NewState1 = members_unjoin(Group, BadMembers, State),
+    NewState1 = members_leave(Group, BadMembers, State),
     case members(Group) of
         [] ->
             {Reference, NewState2} = waiting_add(Group, Pid, NewState1),
@@ -182,7 +182,7 @@ handle_call(_Request, _From, State) ->
 %% @private
 %%------------------------------------------------------------------------------
 handle_cast({leave, Group, Members}, State) ->
-    {noreply, members_unjoin(Group, Members, State)};
+    {noreply, members_leave(Group, Members, State)};
 handle_cast({del_waiting, Reference}, State) ->
     {noreply, waiting_remove(Reference, State)};
 handle_cast({merge, Memberships}, State) ->
@@ -193,10 +193,10 @@ handle_cast(_Request, State) ->
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-handle_info({'DOWN', _Ref, process, Pid, _Reason}, State) ->
-    {noreply, members_unjoin('_', Pid, State)};
+handle_info({'DOWN', Reference, process, Pid, _Reason}, State) ->
+    {noreply, process_down(Pid, Reference, State)};
 handle_info({nodedown, Node}, State) ->
-    {noreply, members_unjoin('_', Node, State)};
+    {noreply, members_leave('_', Node, State)};
 handle_info({nodeup, Node}, State = #state{name = Name}) ->
     gen_server:cast({Name, Node}, {merge, memberships()}),
     {noreply, State};
@@ -221,6 +221,18 @@ terminate(_Reason, _State) ->
 %%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
+
+%%------------------------------------------------------------------------------
+%% @private
+%% Process a 'DOWN' message, either from a group member or a waiting process.
+%%------------------------------------------------------------------------------
+process_down(Pid, Reference, State) ->
+    process_down_impl(Pid, State, waiting_remove(Reference, State)).
+process_down_impl(Pid, State, State = #state{name = Name}) ->
+    ok = multi_cast(nodes(), Name, {leave, '_', Pid}),
+    members_leave('_', Pid, State);
+process_down_impl(_Pid, _OldState, NewState) ->
+    NewState.
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -291,11 +303,11 @@ member_insert(Group, Member) ->
 
 %%------------------------------------------------------------------------------
 %% @private
-%% Unjoin one or more members from a group. Members are identified either by
+%% Leave one or more members from a group. Members are identified either by
 %% pid, node or member record(s). This will also demonitor the members if
 %% they resided on the local node.
 %%------------------------------------------------------------------------------
-members_unjoin(Group, Members, State) ->
+members_leave(Group, Members, State) ->
     case members_delete(Group, Members) of
         N when N > 0 ->
             members_demonitor(Members, State);
@@ -401,8 +413,8 @@ multi_call(Name, Message) ->
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-multi_cast(Name, Message) ->
-    gen_server:abcast(Name, Message),
+multi_cast(Nodes, Name, Message) ->
+    gen_server:abcast(Nodes, Name, Message),
     ok.
 
 %%%=============================================================================

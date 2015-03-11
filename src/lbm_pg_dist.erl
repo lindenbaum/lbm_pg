@@ -30,7 +30,7 @@
 %% lbm_pg_dist callbacks
 -export([spec/0,
          join/2,
-         unjoin/2,
+         leave/2,
          members/1,
          add_waiting/2,
          del_waiting/2,
@@ -48,7 +48,7 @@
 -callback join(atom(), lbm_pg:name(), #lbm_pg_member{}) -> ok.
 %% Add a member to the process group with name `Name'.
 
--callback unjoin(atom(), lbm_pg:name(), pid() | [#lbm_pg_member{}]) -> ok.
+-callback leave(atom(), lbm_pg:name(), pid() | [#lbm_pg_member{}]) -> ok.
 %% Report a list of bad/exited members for the group with name `Name'.
 
 -callback members(atom(), lbm_pg:name()) -> [#lbm_pg_member{}].
@@ -91,8 +91,8 @@ join(Group, Member) -> ?BACKEND:join(?MODULE, Group, Member).
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
--spec unjoin(lbm_pg:name(), pid() | [#lbm_pg_member{}]) -> ok.
-unjoin(Group, Members) -> ?BACKEND:unjoin(?MODULE, Group, Members).
+-spec leave(lbm_pg:name(), pid() | [#lbm_pg_member{}]) -> ok.
+leave(Group, Members) -> ?BACKEND:leave(?MODULE, Group, Members).
 
 %%------------------------------------------------------------------------------
 %% @private
