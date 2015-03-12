@@ -36,7 +36,7 @@
 
 %%------------------------------------------------------------------------------
 %% @doc
-%% See {@link lbm_pg:send/4} for detailed documentation.
+%% See {@link lbm_pg:sync_send/4} for detailed documentation.
 %% @end
 %%------------------------------------------------------------------------------
 -spec send(lbm_pg:name(), term(), timeout(), [lbm_pg:send_option()]) -> any().
@@ -52,12 +52,9 @@ send(Group, Message, Timeout, Options) ->
 %% @private
 %%------------------------------------------------------------------------------
 members(Group, Options) ->
-    Members = lbm_pg_dist:members(Group),
-    case cached_member(Group, Options) of
-        Member = #lbm_pg_member{} ->
-            [Member | shuffle(lists:delete(Member, Members))];
-        _ ->
-            shuffle(Members)
+    case lists:member(no_cache, Options) of
+        false -> lbm_pg_dist:members(Group, true);
+        true  -> shuffle(lbm_pg_dist:members(Group, false))
     end.
 
 %%------------------------------------------------------------------------------
@@ -67,15 +64,6 @@ shuffle(L) when is_list(L) ->
     shuffle(L, length(L)).
 shuffle(L, Len) ->
     [E || {_, E} <- lists:sort([{crypto:rand_uniform(0, Len), E} || E <- L])].
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-cached_member(Group, Options) ->
-    case lists:member(no_cache, Options) of
-        false -> lbm_pg_dist:cached_member(Group);
-        true  -> undefined
-    end.
 
 %%------------------------------------------------------------------------------
 %% @private

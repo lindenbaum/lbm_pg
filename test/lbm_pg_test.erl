@@ -96,6 +96,8 @@ basic_sync_send() ->
 
     {P, PR} = spawn_monitor(sender(?GROUP, Messages, [])),
 
+    ok = lbm_pg:info(),
+
     ?DOWN(SR, S),
     ?DOWN(PR, P),
 

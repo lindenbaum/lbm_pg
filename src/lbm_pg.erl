@@ -151,7 +151,7 @@ leave(Group, Pid) when is_pid(Pid) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec members(name()) -> [#lbm_pg_member{}].
-members(Group) -> lbm_pg_dist:members(Group).
+members(Group) -> lbm_pg_dist:members(Group, false).
 
 %%------------------------------------------------------------------------------
 %% @doc

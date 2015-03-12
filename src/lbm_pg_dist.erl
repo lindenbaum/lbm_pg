@@ -23,8 +23,8 @@
 %%% state without `global' locks.
 %%%
 %%% The table ?MODULE contains the following terms:
-%%% `{{member, Group, #lbm_pg_member{}}}': a group member
-%%% `{{cached, Group}, #lbm_pg_member{}}': the last cached member for a group
+%%% `{{Group, cached, #lbm_pg_member{}}}': the cached member for a group
+%%% `{{Group, member, #lbm_pg_member{}}}': an ordinary group member
 %%% @end
 %%%=============================================================================
 
@@ -36,11 +36,10 @@
 -export([spec/0,
          join/2,
          leave/2,
-         members/1,
+         members/2,
          add_waiting/2,
          del_waiting/2,
          cache_member/2,
-         cached_member/1,
          info/0]).
 
 %% Internal API
@@ -93,8 +92,9 @@ leave(Group, BadMembers) ->
 %% Returns a list of all members for the group with name `Name'.
 %% @end
 %%------------------------------------------------------------------------------
--spec members(lbm_pg:name()) -> [#lbm_pg_member{}].
-members(Group) -> [M || [M] <- ets:match(?MODULE, {{member, Group, '$1'}})].
+-spec members(lbm_pg:name(), IncludeCached :: boolean()) -> [#lbm_pg_member{}].
+members(Group, true)  -> members_by_type('_', Group);
+members(Group, false) -> members_by_type(member, Group).
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -133,19 +133,6 @@ cache_member(Group, Member) -> gen_server:cast(?MODULE, {cache, Group, Member}).
 
 %%------------------------------------------------------------------------------
 %% @doc
-%% Return the last cached member for a specific group.
-%% @end
-%%------------------------------------------------------------------------------
--spec cached_member(lbm_pg:name()) -> #lbm_pg_member{} | undefined.
-cached_member(Group) ->
-    try
-        ets:lookup_element(?MODULE, {cached, Group}, 2)
-    catch
-        error:badarg -> undefined
-    end.
-
-%%------------------------------------------------------------------------------
-%% @doc
 %% Print the current group and membership info to stdout.
 %% @end
 %%------------------------------------------------------------------------------
@@ -154,10 +141,13 @@ info() ->
     Groups = groups(),
     io:format("~w Groups:~n", [length(Groups)]),
     [begin
-         Members = members(Group),
+         Cached = members_by_type(cached, Group),
+         Members = members(Group, false),
          io:format(" * ~w (~w Members):~n", [Group, length(Members)]),
-         [io:format("   * ~w (~s)~n", [Pid, Backend])
-          || #lbm_pg_member{b = Backend, p = Pid} <- Members]
+         [io:format("   * ~w (Backend:~s, Cached:true)~n", [Pid, Backend])
+          || #lbm_pg_member{b = Backend, p = Pid} <- Cached],
+         [io:format("   * ~w (Backend:~s, Cached:false)~n", [Pid, Backend])
+          || #lbm_pg_member{b = Backend, p = Pid} <- Members -- Cached]
      end || Group <- Groups],
     ok.
 
@@ -174,6 +164,8 @@ start_link() -> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 %%%=============================================================================
 %%% gen_server callbacks
 %%%=============================================================================
+
+-define(entry(Type, Group, Member), {{Group, Type, Member}}).
 
 -record(waiting, {
           ref   :: reference(),
@@ -211,7 +203,7 @@ handle_call({join, Group, Member}, _From, State) ->
     end;
 handle_call({add_waiting, Group, Pid, BadMembers}, _From, State) ->
     NewState1 = members_leave(Group, BadMembers, State),
-    case members(Group) of
+    case members(Group, false) of
         [] ->
             {Reference, NewState2} = waiting_add(Group, Pid, NewState1),
             {reply, {ok, Reference}, NewState2};
@@ -347,7 +339,7 @@ member_join(Group, Member, State = #state{monitors = Ms}) ->
 %% @private
 %%------------------------------------------------------------------------------
 member_insert(Group, Member) ->
-    ets:insert_new(?MODULE, {{member, Group, Member}}).
+    ets:insert_new(?MODULE, ?entry(member, Group, Member)).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -358,7 +350,6 @@ member_insert(Group, Member) ->
 members_leave(Group, Members, State) ->
     case members_delete(Group, Members) of
         N when N > 0 ->
-            true = cache_delete(Group, Members),
             members_demonitor(Members, State);
         _ ->
             State
@@ -396,23 +387,28 @@ members_demonitor(Members, State) when is_list(Members) ->
 %% record(s).
 %%------------------------------------------------------------------------------
 members_delete(Group, Node) when is_atom(Node) ->
-    Key = {member, Group, #lbm_pg_member{b = '_', p = '$1'}},
+    Entry = ?entry('_', Group, #lbm_pg_member{b = '_', p = '$1'}),
     Guards = [{'=:=', {node, '$1'}, Node}],
-    ets:select_delete(?MODULE, [{{Key}, Guards, [true]}]);
+    ets:select_delete(?MODULE, [{Entry, Guards, [true]}]);
 members_delete(Group, Pid) when is_pid(Pid) ->
     members_delete(Group, #lbm_pg_member{b = '_', p = Pid});
 members_delete(Group, Member = #lbm_pg_member{}) ->
-    Key = {member, Group, Member},
-    ets:select_delete(?MODULE, [{{Key}, [], [true]}]);
+    Entry = ?entry('_', Group, Member),
+    ets:select_delete(?MODULE, [{Entry, [], [true]}]);
 members_delete(Group, Members) when is_list(Members) ->
     lists:sum([members_delete(Group, Member) || Member <- Members]).
 
 %%------------------------------------------------------------------------------
 %% @private
+%%------------------------------------------------------------------------------
+members_by_type(Type, Group) ->
+    [Member || [Member] <- ets:match(?MODULE, ?entry(Type, Group, '$1'))].
+
+%%------------------------------------------------------------------------------
+%% @private
 %% Return all known memberships.
 %%------------------------------------------------------------------------------
-memberships() ->
-    lists:sort([M || [M] <- ets:match(?MODULE, {{member, '_', '$1'}})]).
+memberships() -> members('_', false).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -422,7 +418,8 @@ memberships() ->
 memberships_merge(Memberships, State) ->
     lists:foldl(
       fun waiting_notify/2, State,
-      [{Group, members(Group)} || Group <- memberships_insert(Memberships)]).
+      [{Group, members(Group, false)}
+       || Group <- memberships_insert(Memberships)]).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -444,33 +441,18 @@ memberships_insert(Memberships) ->
 %% Cache the member only if it is currently joined to the group.
 %%------------------------------------------------------------------------------
 cache_member(Group, Member, State) ->
-    IsJoined = lists:member(Member, members(Group)),
-    [ets:insert(?MODULE, {{cached, Group}, Member}) || IsJoined],
+    [begin
+         ets:match_delete(?MODULE, ?entry(cached, Group, '_')),
+         ets:insert(?MODULE, ?entry(cached, Group, Member))
+     end || lists:member(Member, members(Group, false))],
     State.
-
-%%------------------------------------------------------------------------------
-%% @private
-%% Remove an eventually cached member.
-%%------------------------------------------------------------------------------
-cache_delete(Group, Member) ->
-    cache_delete(cached_member(Group), {cached, Group}, Member).
-cache_delete(M = #lbm_pg_member{}, Key, M) ->
-    ets:delete_object(?MODULE, {Key, M});
-cache_delete(M = #lbm_pg_member{p = Pid}, Key, Pid) when is_pid(Pid) ->
-    ets:delete_object(?MODULE, {Key, M});
-cache_delete(M = #lbm_pg_member{p = Pid}, Key, Node) when node(Pid) =:= Node ->
-    ets:delete_object(?MODULE, {Key, M});
-cache_delete(Cached, Key, Members) when is_list(Members) ->
-    ok =:= lists:foreach(fun(M) -> cache_delete(Cached, Key, M) end, Members);
-cache_delete(_Cached, _Key, _Member) ->
-    true.
 
 %%------------------------------------------------------------------------------
 %% @private
 %% Return all known groups.
 %%------------------------------------------------------------------------------
 groups() ->
-    lists:usort([G || [G] <- ets:match(?MODULE, {{member, '$1', '_'}})]).
+    lists:usort([G || [G] <- ets:match(?MODULE, ?entry(member, '$1', '_'))]).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -513,9 +495,9 @@ ets_matches_working() ->
     ?assertEqual([group], groups()),
 
     ?assertEqual(1, members_delete(group, [Member1])),
-    ?assertEqual([Member2], members(group)),
+    ?assertEqual([Member2], members(group, false)),
     ?assertEqual(1, members_delete(group, Member2)),
-    ?assertEqual([], members(group)),
+    ?assertEqual([], members(group, false)),
     ?assertEqual([], groups()),
 
     ?assert(member_insert(group, Member1)),
@@ -526,21 +508,20 @@ ets_matches_working() ->
 
     ?assertEqual(1, members_delete('_', self())),
     ?assertEqual([group], groups()),
-    ?assertEqual([Member1], members(group)),
+    ?assertEqual([Member1], members(group, false)),
     ?assertEqual(1, members_delete('_', node())),
     ?assertEqual([], groups()),
-    ?assertEqual([], members(group)),
+    ?assertEqual([], members(group, false)),
 
-    ?assertEqual(undefined, cached_member(group)),
+    ?assertEqual([], members_by_type(cached, group)),
     ?assert(cache_member(group, Member1, true)),
-    ?assertEqual(undefined, cached_member(group)),
+    ?assertEqual([], members_by_type(cached, group)),
     ?assert(member_insert(group, Member1)),
     ?assert(cache_member(group, Member1, true)),
-    ?assertEqual(Member1, cached_member(group)),
-    ?assert(cache_delete(group, Member2)),
-    ?assertEqual(Member1, cached_member(group)),
-    ?assertEqual(1, members_delete(group, Member1)),
-    ?assert(cache_delete(group, Member1)),
-    ?assertEqual(undefined, cached_member(group)).
+    ?assertEqual([Member1], members_by_type(cached, group)),
+    ?assertEqual(0, members_delete(group, Member2)),
+    ?assertEqual([Member1], members_by_type(cached, group)),
+    ?assertEqual(2, members_delete(group, Member1)),
+    ?assertEqual([], members_by_type(cached, group)).
 
 -endif.
