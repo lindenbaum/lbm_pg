@@ -24,6 +24,7 @@
 %%%
 %%% The table ?MODULE contains the following terms:
 %%% `{{member, Group, #lbm_pg_member{}}}': a group member
+%%% `{{cached, Group}, #lbm_pg_member{}}': the last cached member for a group
 %%% @end
 %%%=============================================================================
 
@@ -38,6 +39,8 @@
          members/1,
          add_waiting/2,
          del_waiting/2,
+         cache_member/2,
+         cached_member/1,
          info/0]).
 
 %% Internal API
@@ -122,6 +125,27 @@ del_waiting(_Group, Reference) ->
 
 %%------------------------------------------------------------------------------
 %% @doc
+%% Cache a specific member of a group.
+%% @end
+%%------------------------------------------------------------------------------
+-spec cache_member(lbm_pg:name(), #lbm_pg_member{}) -> ok.
+cache_member(Group, Member) -> gen_server:cast(?MODULE, {cache, Group, Member}).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% Return the last cached member for a specific group.
+%% @end
+%%------------------------------------------------------------------------------
+-spec cached_member(lbm_pg:name()) -> #lbm_pg_member{} | undefined.
+cached_member(Group) ->
+    try
+        ets:lookup_element(?MODULE, {cached, Group}, 2)
+    catch
+        error:badarg -> undefined
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc
 %% Print the current group and membership info to stdout.
 %% @end
 %%------------------------------------------------------------------------------
@@ -171,7 +195,8 @@ init([]) ->
               {?MODULE, Node} ! {new, ?MODULE, node()},
               self() ! {nodeup, Node}
       end, Nodes),
-    ?MODULE = ets:new(?MODULE, [ordered_set, protected, named_table]),
+    EtsOpts = [ordered_set, protected, named_table, {read_concurrency, true}],
+    ?MODULE = ets:new(?MODULE, EtsOpts),
     {ok, #state{}}.
 
 %%------------------------------------------------------------------------------
@@ -193,7 +218,10 @@ handle_call({add_waiting, Group, Pid, BadMembers}, _From, State) ->
         Members ->
             {reply, {ok, Members}, NewState1}
     end;
-handle_call(_Request, _From, State) ->
+handle_call(Request, From, State) ->
+    error_logger:warning_msg(
+      "Received unexpected call ~w from ~w",
+      [Request, From]),
     {reply, undef, State}.
 
 %%------------------------------------------------------------------------------
@@ -203,9 +231,12 @@ handle_cast({leave, Group, Members}, State) ->
     {noreply, members_leave(Group, Members, State)};
 handle_cast({del_waiting, Reference}, State) ->
     {noreply, waiting_remove(Reference, State)};
+handle_cast({cache, Group, Member}, State) ->
+    {noreply, cache_member(Group, Member, State)};
 handle_cast({merge, Memberships}, State) ->
     {noreply, memberships_merge(Memberships, State)};
-handle_cast(_Request, State) ->
+handle_cast(Request, State) ->
+    error_logger:warning_msg("Received unexpected cast ~w", [Request]),
     {noreply, State}.
 
 %%------------------------------------------------------------------------------
@@ -221,7 +252,8 @@ handle_info({nodeup, Node}, State) ->
 handle_info({new, ?MODULE, Node}, State) ->
     gen_server:cast({?MODULE, Node}, {merge, memberships()}),
     {noreply, State};
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    error_logger:warning_msg("Received unexpected info ~w", [Info]),
     {noreply, State}.
 
 %%------------------------------------------------------------------------------
@@ -232,9 +264,7 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-terminate(_Reason, _State) ->
-    true = ets:delete(?MODULE),
-    ok.
+terminate(_Reason, _State) -> to_ok(ets:delete(?MODULE)).
 
 %%%=============================================================================
 %%% Internal functions
@@ -328,6 +358,7 @@ member_insert(Group, Member) ->
 members_leave(Group, Members, State) ->
     case members_delete(Group, Members) of
         N when N > 0 ->
+            true = cache_delete(Group, Members),
             members_demonitor(Members, State);
         _ ->
             State
@@ -381,7 +412,7 @@ members_delete(Group, Members) when is_list(Members) ->
 %% Return all known memberships.
 %%------------------------------------------------------------------------------
 memberships() ->
-    lists:sort([Member || {Member = {member, _, _}} <- ets:tab2list(?MODULE)]).
+    lists:sort([M || [M] <- ets:match(?MODULE, {{member, '_', '$1'}})]).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -410,6 +441,32 @@ memberships_insert(Memberships) ->
 
 %%------------------------------------------------------------------------------
 %% @private
+%% Cache the member only if it is currently joined to the group.
+%%------------------------------------------------------------------------------
+cache_member(Group, Member, State) ->
+    IsJoined = lists:member(Member, members(Group)),
+    [ets:insert(?MODULE, {{cached, Group}, Member}) || IsJoined],
+    State.
+
+%%------------------------------------------------------------------------------
+%% @private
+%% Remove an eventually cached member.
+%%------------------------------------------------------------------------------
+cache_delete(Group, Member) ->
+    cache_delete(cached_member(Group), {cached, Group}, Member).
+cache_delete(M = #lbm_pg_member{}, Key, M) ->
+    ets:delete_object(?MODULE, {Key, M});
+cache_delete(M = #lbm_pg_member{p = Pid}, Key, Pid) when is_pid(Pid) ->
+    ets:delete_object(?MODULE, {Key, M});
+cache_delete(M = #lbm_pg_member{p = Pid}, Key, Node) when node(Pid) =:= Node ->
+    ets:delete_object(?MODULE, {Key, M});
+cache_delete(Cached, Key, Members) when is_list(Members) ->
+    ok =:= lists:foreach(fun(M) -> cache_delete(Cached, Key, M) end, Members);
+cache_delete(_Cached, _Key, _Member) ->
+    true.
+
+%%------------------------------------------------------------------------------
+%% @private
 %% Return all known groups.
 %%------------------------------------------------------------------------------
 groups() ->
@@ -418,16 +475,17 @@ groups() ->
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-multi_call(Message) ->
-    catch gen_server:multi_call(?MODULE, Message),
-    ok.
+multi_call(Message) -> to_ok(catch gen_server:multi_call(?MODULE, Message)).
 
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-multi_cast(Nodes, Message) ->
-    gen_server:abcast(Nodes, ?MODULE, Message),
-    ok.
+multi_cast(Nodes, Message) -> to_ok(gen_server:abcast(Nodes, ?MODULE, Message)).
+
+%%------------------------------------------------------------------------------
+%% @private
+%%------------------------------------------------------------------------------
+to_ok(_) -> ok.
 
 %%%=============================================================================
 %%% Internal tests
@@ -471,6 +529,18 @@ ets_matches_working() ->
     ?assertEqual([Member1], members(group)),
     ?assertEqual(1, members_delete('_', node())),
     ?assertEqual([], groups()),
-    ?assertEqual([], members(group)).
+    ?assertEqual([], members(group)),
+
+    ?assertEqual(undefined, cached_member(group)),
+    ?assert(cache_member(group, Member1, true)),
+    ?assertEqual(undefined, cached_member(group)),
+    ?assert(member_insert(group, Member1)),
+    ?assert(cache_member(group, Member1, true)),
+    ?assertEqual(Member1, cached_member(group)),
+    ?assert(cache_delete(group, Member2)),
+    ?assertEqual(Member1, cached_member(group)),
+    ?assertEqual(1, members_delete(group, Member1)),
+    ?assert(cache_delete(group, Member1)),
+    ?assertEqual(undefined, cached_member(group)).
 
 -endif.

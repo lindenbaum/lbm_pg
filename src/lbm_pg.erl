@@ -202,11 +202,7 @@ sync_send(Group, Message, Timeout) -> sync_send(Group, Message, Timeout, []).
 %%------------------------------------------------------------------------------
 -spec sync_send(name(), term(), timeout(), [send_option()]) -> any().
 sync_send(Group, Message, Timeout, Options) ->
-    {Member, Result} = lbm_pg_sync:send(
-                         get_members(Group, Options),
-                         Group, Message, Timeout, Options),
-    maybe_cache(Group, Member, Options),
-    Result.
+    lbm_pg_sync:send(Group, Message, Timeout, Options).
 
 %%------------------------------------------------------------------------------
 %% @doc
@@ -248,41 +244,3 @@ init([]) -> {ok, {{one_for_one, 0, 1}, [lbm_pg_dist:spec()]}}.
 %%------------------------------------------------------------------------------
 new_member(Backend, Pid) when Backend =:= gen_fsm; Backend =:= gen_server ->
     #lbm_pg_member{b = Backend, p = Pid}.
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-get_members(Group, Options) ->
-    Members = members(Group),
-    case get_chached(Group, Options) of
-        Member = #lbm_pg_member{} ->
-            [Member | shuffle(lists:delete(Member, Members))];
-        _ ->
-            shuffle(Members)
-    end.
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-shuffle(L) when is_list(L) ->
-    shuffle(L, length(L)).
-shuffle(L, Len) ->
-    [E || {_, E} <- lists:sort([{crypto:rand_uniform(0, Len), E} || E <- L])].
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-get_chached(Group, Options) ->
-    case lists:member(no_cache, Options) of
-        false -> get({?MODULE, Group});
-        true  -> undefined
-    end.
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-maybe_cache(Group, Member, Options) ->
-    case lists:member(no_cache, Options) of
-        false -> put({?MODULE, Group}, Member);
-        true  -> ok
-    end.

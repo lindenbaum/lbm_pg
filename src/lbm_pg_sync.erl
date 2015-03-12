@@ -26,7 +26,7 @@
 -module(lbm_pg_sync).
 
 %% API
--export([send/5]).
+-export([send/4]).
 
 -include("lbm_pg.hrl").
 
@@ -39,18 +39,52 @@
 %% See {@link lbm_pg:send/4} for detailed documentation.
 %% @end
 %%------------------------------------------------------------------------------
--spec send([#lbm_pg_member{}],
-           lbm_pg:name(),
-           term(),
-           timeout(),
-           [lbm_pg:send_option()]) -> {#lbm_pg_member{}, any()}.
-send(Members, Group, Message, Timeout, Options) ->
+-spec send(lbm_pg:name(), term(), timeout(), [lbm_pg:send_option()]) -> any().
+send(Group, Message, Timeout, Options) ->
     Args = {Group, Message, Timeout, Options},
-    sync_send_loop(Members, [], Args, Timeout).
+    sync_send_loop(members(Group, Options), [], Args, Timeout).
 
 %%%=============================================================================
 %%% internal functions
 %%%=============================================================================
+
+%%------------------------------------------------------------------------------
+%% @private
+%%------------------------------------------------------------------------------
+members(Group, Options) ->
+    Members = lbm_pg_dist:members(Group),
+    case cached_member(Group, Options) of
+        Member = #lbm_pg_member{} ->
+            [Member | shuffle(lists:delete(Member, Members))];
+        _ ->
+            shuffle(Members)
+    end.
+
+%%------------------------------------------------------------------------------
+%% @private
+%%------------------------------------------------------------------------------
+shuffle(L) when is_list(L) ->
+    shuffle(L, length(L)).
+shuffle(L, Len) ->
+    [E || {_, E} <- lists:sort([{crypto:rand_uniform(0, Len), E} || E <- L])].
+
+%%------------------------------------------------------------------------------
+%% @private
+%%------------------------------------------------------------------------------
+cached_member(Group, Options) ->
+    case lists:member(no_cache, Options) of
+        false -> lbm_pg_dist:cached_member(Group);
+        true  -> undefined
+    end.
+
+%%------------------------------------------------------------------------------
+%% @private
+%%------------------------------------------------------------------------------
+maybe_cache_member(Group, Member, Options) ->
+    case lists:member(no_cache, Options) of
+        false -> lbm_pg_dist:cache_member(Group, Member);
+        true  -> ok
+    end.
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -76,12 +110,13 @@ sync_send_loop([], BadMs, Args = {Group, _, _, Opts}, Timeout) ->
             NewTimeout = remaining_millis(Timeout, StartTimestamp),
             sync_send_loop(Members, [], Args, NewTimeout)
     end;
-sync_send_loop([M | Ms], BadMs, Args = {Group, Msg, _, _}, Timeout) ->
+sync_send_loop([M | Ms], BadMs, Args = {Group, Msg, _, Opts}, Timeout) ->
     StartTimestamp = os:timestamp(),
     try apply_sync(M, Msg, Timeout) of
         Result ->
             ok = lbm_pg_dist:leave(Group, BadMs),
-            {M, Result}
+            ok = maybe_cache_member(Group, M, Opts),
+            Result
     catch
         exit:{timeout, _} ->
             %% member is not dead, only overloaded... anyway Timeout is over
