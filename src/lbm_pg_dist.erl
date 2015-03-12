@@ -165,7 +165,10 @@ start_link() -> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 %%% gen_server callbacks
 %%%=============================================================================
 
--define(entry(Type, Group, Member), {{Group, Type, Member}}).
+-define(ETS_OPTS, [ordered_set, protected, named_table]).
+
+-define(key(Type, Group, Member), {Group, Type, Member}).
+-define(entry(Key), {Key}).
 
 -record(waiting, {
           ref   :: reference(),
@@ -187,8 +190,7 @@ init([]) ->
               {?MODULE, Node} ! {new, ?MODULE, node()},
               self() ! {nodeup, Node}
       end, Nodes),
-    EtsOpts = [ordered_set, protected, named_table, {read_concurrency, true}],
-    ?MODULE = ets:new(?MODULE, EtsOpts),
+    ?MODULE = ets:new(?MODULE, [{read_concurrency, true} | ?ETS_OPTS]),
     {ok, #state{}}.
 
 %%------------------------------------------------------------------------------
@@ -339,7 +341,7 @@ member_join(Group, Member, State = #state{monitors = Ms}) ->
 %% @private
 %%------------------------------------------------------------------------------
 member_insert(Group, Member) ->
-    ets:insert_new(?MODULE, ?entry(member, Group, Member)).
+    ets:insert_new(?MODULE, ?entry(?key(member, Group, Member))).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -387,13 +389,13 @@ members_demonitor(Members, State) when is_list(Members) ->
 %% record(s).
 %%------------------------------------------------------------------------------
 members_delete(Group, Node) when is_atom(Node) ->
-    Entry = ?entry('_', Group, #lbm_pg_member{b = '_', p = '$1'}),
+    Entry = ?entry(?key('_', Group, #lbm_pg_member{b = '_', p = '$1'})),
     Guards = [{'=:=', {node, '$1'}, Node}],
     ets:select_delete(?MODULE, [{Entry, Guards, [true]}]);
 members_delete(Group, Pid) when is_pid(Pid) ->
     members_delete(Group, #lbm_pg_member{b = '_', p = Pid});
 members_delete(Group, Member = #lbm_pg_member{}) ->
-    Entry = ?entry('_', Group, Member),
+    Entry = ?entry(?key('_', Group, Member)),
     ets:select_delete(?MODULE, [{Entry, [], [true]}]);
 members_delete(Group, Members) when is_list(Members) ->
     lists:sum([members_delete(Group, Member) || Member <- Members]).
@@ -402,13 +404,15 @@ members_delete(Group, Members) when is_list(Members) ->
 %% @private
 %%------------------------------------------------------------------------------
 members_by_type(Type, Group) ->
-    [Member || [Member] <- ets:match(?MODULE, ?entry(Type, Group, '$1'))].
+    [Member || [Member] <- ets:match(?MODULE, ?entry(?key(Type, Group, '$1')))].
 
 %%------------------------------------------------------------------------------
 %% @private
 %% Return all known memberships.
 %%------------------------------------------------------------------------------
-memberships() -> members('_', false).
+memberships() ->
+    [Key || ?entry(Key = ?key(member, _, _)) <- ets:tab2list(?MODULE)].
+%%    [Entry || [Entry] <- ets:match(?MODULE, ?entry(member, '_', '_'))].
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -429,7 +433,7 @@ memberships_merge(Memberships, State) ->
 memberships_insert(Memberships) ->
     lists:usort(
       lists:foldl(
-        fun({member, Group, Member}, Acc) ->
+        fun(?key(member, Group, Member), Acc) ->
                 case member_insert(Group, Member) of
                     true  -> [Group | Acc];
                     false -> Acc
@@ -442,8 +446,8 @@ memberships_insert(Memberships) ->
 %%------------------------------------------------------------------------------
 cache_member(Group, Member, State) ->
     [begin
-         ets:match_delete(?MODULE, ?entry(cached, Group, '_')),
-         ets:insert(?MODULE, ?entry(cached, Group, Member))
+         ets:match_delete(?MODULE, ?entry(?key(cached, Group, '_'))),
+         ets:insert(?MODULE, ?entry(?key(cached, Group, Member)))
      end || lists:member(Member, members(Group, false))],
     State.
 
@@ -452,7 +456,8 @@ cache_member(Group, Member, State) ->
 %% Return all known groups.
 %%------------------------------------------------------------------------------
 groups() ->
-    lists:usort([G || [G] <- ets:match(?MODULE, ?entry(member, '$1', '_'))]).
+    Key = ?key(member, '$1', '_'),
+    lists:usort([G || [G] <- ets:match(?MODULE, ?entry(Key))]).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -480,7 +485,7 @@ to_ok(_) -> ok.
 ets_test_() -> {spawn, fun ets_matches_working/0}.
 
 ets_matches_working() ->
-    ?MODULE = ets:new(?MODULE, [ordered_set, protected, named_table]),
+    ?MODULE = ets:new(?MODULE, ?ETS_OPTS),
 
     Pid = spawn(fun() -> ok end),
     Member1 = #lbm_pg_member{b = m, p = Pid},
@@ -490,12 +495,14 @@ ets_matches_working() ->
 
     ?assert(member_insert(group, Member1)),
     ?assert(not member_insert(group, Member1)),
+    ?assertEqual([?key(member, group, Member1)], memberships()),
     ?assert(member_insert(group, Member2)),
     ?assert(not member_insert(group, Member2)),
     ?assertEqual([group], groups()),
 
     ?assertEqual(1, members_delete(group, [Member1])),
     ?assertEqual([Member2], members(group, false)),
+    ?assertEqual([?key(member, group, Member2)], memberships()),
     ?assertEqual(1, members_delete(group, Member2)),
     ?assertEqual([], members(group, false)),
     ?assertEqual([], groups()),
