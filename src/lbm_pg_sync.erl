@@ -26,7 +26,8 @@
 -module(lbm_pg_sync).
 
 %% API
--export([send/4]).
+-export([send/4,
+         remaining_millis/2]).
 
 -include("lbm_pg.hrl").
 
@@ -43,6 +44,17 @@
 send(Group, Message, Timeout, Options) ->
     Args = {Group, Message, Timeout, Options},
     sync_send_loop(members(Group, Options), [], Args, Timeout).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% Calculate the remaining value for `Timeout' given a start timestamp.
+%% @end
+%%------------------------------------------------------------------------------
+-spec remaining_millis(timeout(), erlang:timestamp()) -> timeout().
+remaining_millis(infinity, _StartTimestamp) ->
+    infinity;
+remaining_millis(Timeout, StartTimestamp) ->
+    Timeout - (to_millis(os:timestamp()) - to_millis(StartTimestamp)).
 
 %%%=============================================================================
 %%% internal functions
@@ -190,15 +202,6 @@ apply_sync(#lbm_pg_member{b = gen_server, p = Pid}, Msg, Timeout) ->
     gen_server:call(Pid, Msg, Timeout);
 apply_sync(#lbm_pg_member{b = gen_fsm, p = Pid}, Msg, Timeout) ->
     gen_fsm:sync_send_event(Pid, Msg, Timeout).
-
-%%------------------------------------------------------------------------------
-%% @private
-%% Calculate the remaining value for `Timeout' given a start timestamp.
-%%------------------------------------------------------------------------------
-remaining_millis(infinity, _StartTimestamp) ->
-    infinity;
-remaining_millis(Timeout, StartTimestamp) ->
-    Timeout - (to_millis(os:timestamp()) - to_millis(StartTimestamp)).
 
 %%------------------------------------------------------------------------------
 %% @private

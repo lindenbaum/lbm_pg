@@ -44,6 +44,9 @@
          sync_send/2,
          sync_send/3,
          sync_send/4,
+         send/2,
+         send/3,
+         send/4,
          info/0]).
 
 %% Application callbacks
@@ -206,11 +209,46 @@ sync_send(Group, Message, Timeout, Options) ->
 
 %%------------------------------------------------------------------------------
 %% @doc
+%% Similar to {@link send/3} with `Timeout' set to `5000'.
+%% @end
+%%------------------------------------------------------------------------------
+-spec send(name(), term()) -> ok.
+send(Group, Message) -> send(Group, Message, 5000).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% Similar to {@link send/4} with `Options' set to `[]'.
+%% @end
+%%------------------------------------------------------------------------------
+-spec send(name(), term(), timeout()) -> ok.
+send(Group, Message, Timeout) -> send(Group, Message, Timeout, []).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% Sends a message asynchronously to exactly one member of a group (if any).
+%% This does not block the calling process. However, {@link lbm_pg:sync_send/4}
+%% will be used under the hood with the specified arguments but the actual call
+%% is made from a worker process taken from a pool of workers. If the message
+%% cannot be delivered, the respective worker will exit (and be restarted).
+%% Thus, errors will not be visible to the implementation but can be observed,
+%% e.g. by viewing the applications crash log.
+%%
+%% For a description of options and semantics see {@link sync_send/4}.
+%% @end
+%%------------------------------------------------------------------------------
+-spec send(name(), term(), timeout(), [send_option()]) -> ok.
+send(Group, Message, Timeout, Options) ->
+    lbm_pg_async:send(Group, Message, Timeout, Options).
+
+%%------------------------------------------------------------------------------
+%% @doc
 %% Print group and membership info to stdout.
 %% @end
 %%------------------------------------------------------------------------------
 -spec info() -> ok.
-info() -> lbm_pg_dist:info().
+info() ->
+    lbm_pg_async:info(),
+    lbm_pg_dist:info().
 
 %%%=============================================================================
 %%% Application callbacks
@@ -233,7 +271,10 @@ stop(_State) -> ok.
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-init([]) -> {ok, {{one_for_one, 0, 1}, [lbm_pg_dist:spec()]}}.
+init([]) ->
+    Workers = application:get_env(?MODULE, workers, 50),
+    Specs = [lbm_pg_async:spec(Workers), lbm_pg_dist:spec()],
+    {ok, {{one_for_one, 0, 1}, Specs}}.
 
 %%%=============================================================================
 %%% internal functions

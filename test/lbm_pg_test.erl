@@ -43,31 +43,32 @@ all_test_() ->
     {foreach, setup(), teardown(),
      [
       fun report_header/0,
-      fun basic_join/0,
-      fun no_members/0,
-      fun no_members_no_wait/0,
-      fun basic_sync_send/0,
-      fun multiple_members/0,
-      fun late_join/0,
-      {spawn, fun() -> one_group_many_concurrent_sync_senders_many_messages([no_cache]) end},
-      {spawn, fun() -> one_group_many_concurrent_sync_senders_many_messages([]) end},
-      {spawn, fun one_group_many_concurrent_sync_senders/0},
-      {spawn, fun one_group_many_concurrent_sync_senders_members_exit/0},
-      {timeout, ?TIMEOUT, {spawn, fun many_groups_one_sync_sender_per_group/0}},
-      {timeout, ?TIMEOUT, {spawn, fun many_groups_many_concurrent_sync_senders/0}},
-      {timeout, ?TIMEOUT, {spawn, fun one_group_limited_concurrent_sync_senders_distributed_setup/0}},
-      {timeout, ?TIMEOUT, {spawn, fun one_group_many_concurrent_sync_senders_distributed_setup/0}},
-      {timeout, ?TIMEOUT, {spawn, fun many_groups_many_concurrent_sync_senders_distributed_setup/0}}
+      fun join_only/0,
+      fun sync_send_no_members/0,
+      fun sync_send_no_members_no_wait/0,
+      fun sync_send_three_messages/0,
+      fun sync_send_to_three_members/0,
+      fun sync_send_member_joins_late/0,
+      {spawn, fun() -> sync_send_one_group_one_member_few_senders([no_cache]) end},
+      {spawn, fun() -> sync_send_one_group_one_member_few_senders([]) end},
+      {spawn, fun sync_send_one_group_one_member_many_senders/0},
+      {spawn, fun sync_send_one_group_many_members_many_senders/0},
+      {timeout, ?TIMEOUT, {spawn, fun sync_send_many_groups_one_sender_per_group/0}},
+      {timeout, ?TIMEOUT, {spawn, fun sync_send_many_groups_many_senders/0}},
+      {timeout, ?TIMEOUT, {spawn, fun sync_send_one_group_few_senders_distributed_setup/0}},
+      {timeout, ?TIMEOUT, {spawn, fun sync_send_one_group_many_senders_distributed_setup/0}},
+      {timeout, ?TIMEOUT, {spawn, fun sync_send_many_groups_many_senders_distributed_setup/0}},
+      fun send_three_messages/0
      ]}.
 
-basic_join() ->
+join_only() ->
     {S, SR} = lbm_pg_member:start(?GROUP, 0),
     receive {joined, S} -> ok end,
     ?assertEqual(1, length(lbm_pg:members(?GROUP))),
     ok = lbm_pg_member:stop(S),
     ?DOWN(SR, S).
 
-no_members() ->
+sync_send_no_members() ->
     ?assertEqual(0, length(lbm_pg:members(?GROUP))),
     try lbm_pg:sync_send(?GROUP, msg, 100) of
         _ -> throw(test_failed)
@@ -76,7 +77,7 @@ no_members() ->
             ok
     end.
 
-no_members_no_wait() ->
+sync_send_no_members_no_wait() ->
     ?assertEqual(0, length(lbm_pg:members(?GROUP))),
     try lbm_pg:sync_send(?GROUP, msg, 100, [no_wait]) of
         _ -> throw(test_failed)
@@ -85,63 +86,70 @@ no_members_no_wait() ->
             ok
     end.
 
-basic_sync_send() ->
+sync_send_three_messages() ->
     Messages = 3,
+    Test = fun() ->
+                   {S, SR} = lbm_pg_member:start(?GROUP, Messages),
+                   receive {joined, S} -> ok end,
+                   ?assertEqual(1, length(lbm_pg:members(?GROUP))),
 
-    {S, SR} = lbm_pg_member:start(?GROUP, Messages),
-    receive {joined, S} -> ok end,
-    ?assertEqual(1, length(lbm_pg:members(?GROUP))),
+                   ok = lbm_pg:info(),
 
-    ok = lbm_pg:info(),
+                   {P, PR} = spawn_monitor(sender(?GROUP, Messages, [])),
 
-    {P, PR} = spawn_monitor(sender(?GROUP, Messages, [])),
+                   ok = lbm_pg:info(),
 
-    ok = lbm_pg:info(),
-
-    ?DOWN(SR, S),
-    ?DOWN(PR, P),
-
+                   ?DOWN(SR, S),
+                   ?DOWN(PR, P)
+           end,
+    Time = element(1, timer:tc(Test)),
+    report(Messages, 1, 1, 1, 1, Time),
     {'EXIT', {timeout, _}} = (catch lbm_pg:sync_send(?GROUP, msg, 100)).
 
-multiple_members() ->
-    {S1, S1R} = lbm_pg_member:start(?GROUP, 1),
-    receive {joined, S1} -> ok end,
-    ?assertEqual(1, length(lbm_pg:members(?GROUP))),
+sync_send_to_three_members() ->
+    Test = fun() ->
+                   {S1, S1R} = lbm_pg_member:start(?GROUP, 1),
+                   receive {joined, S1} -> ok end,
+                   ?assertEqual(1, length(lbm_pg:members(?GROUP))),
 
-    {S2, S2R} = lbm_pg_member:start(?GROUP, 1),
-    receive {joined, S2} -> ok end,
-    ?assertEqual(2, length(lbm_pg:members(?GROUP))),
+                   {S2, S2R} = lbm_pg_member:start(?GROUP, 1),
+                   receive {joined, S2} -> ok end,
+                   ?assertEqual(2, length(lbm_pg:members(?GROUP))),
 
-    {S3, S3R} = lbm_pg_member:start(?GROUP, 1),
-    receive {joined, S3} -> ok end,
-    ?assertEqual(3, length(lbm_pg:members(?GROUP))),
+                   {S3, S3R} = lbm_pg_member:start(?GROUP, 1),
+                   receive {joined, S3} -> ok end,
+                   ?assertEqual(3, length(lbm_pg:members(?GROUP))),
 
-    {P, PR} = spawn_monitor(sender(?GROUP, 3, [])),
+                   {P, PR} = spawn_monitor(sender(?GROUP, 3, [])),
 
-    ?DOWN(S1R, S1),
-    ?DOWN(S2R, S2),
-    ?DOWN(S3R, S3),
-    ?DOWN(PR, P),
-
+                   ?DOWN(S1R, S1),
+                   ?DOWN(S2R, S2),
+                   ?DOWN(S3R, S3),
+                   ?DOWN(PR, P)
+           end,
+    Time = element(1, timer:tc(Test)),
+    report(3, 1, 3, 1, 1, Time),
     {'EXIT', {timeout, _}} = (catch lbm_pg:sync_send(?GROUP, msg, 100)).
 
-late_join() ->
+sync_send_member_joins_late() ->
     Messages = 3,
+    Test = fun() ->
+                   {P, PR} = spawn_monitor(sender(?GROUP, Messages, [])),
 
-    {P, PR} = spawn_monitor(sender(?GROUP, Messages, [])),
+                   timer:sleep(500),
 
-    timer:sleep(500),
+                   {S, SR} = lbm_pg_member:start(?GROUP, Messages),
+                   receive {joined, S} -> ok end,
+                   ?assertEqual(1, length(lbm_pg:members(?GROUP))),
 
-    {S, SR} = lbm_pg_member:start(?GROUP, Messages),
-    receive {joined, S} -> ok end,
-    ?assertEqual(1, length(lbm_pg:members(?GROUP))),
-
-    ?DOWN(PR, P),
-    ?DOWN(SR, S),
-
+                   ?DOWN(PR, P),
+                   ?DOWN(SR, S)
+           end,
+    Time = element(1, timer:tc(Test)),
+    report(Messages, 1, 1, 1, 1, Time),
     {'EXIT', {timeout, _}} = (catch lbm_pg:sync_send(?GROUP, msg, 100)).
 
-one_group_many_concurrent_sync_senders_many_messages(Options) ->
+sync_send_one_group_one_member_few_senders(Options) ->
     Messages = 100000,
     Senders = 100,
     MessagesPerSender = Messages div Senders,
@@ -156,7 +164,7 @@ one_group_many_concurrent_sync_senders_many_messages(Options) ->
     Time = element(1, timer:tc(Test)),
     report(Messages, 1, 1, Senders, 1, Time).
 
-one_group_many_concurrent_sync_senders() ->
+sync_send_one_group_one_member_many_senders() ->
     Messages = 100000,
     Sender = fun(_) ->
                      spawn_monitor(sender(?GROUP, 1, []))
@@ -169,7 +177,7 @@ one_group_many_concurrent_sync_senders() ->
     Time = element(1, timer:tc(Test)),
     report(Messages, 1, 1, Messages, 1, Time).
 
-one_group_many_concurrent_sync_senders_members_exit() ->
+sync_send_one_group_many_members_many_senders() ->
     Members = 4,
     Messages = 100000,
     NumTermsPerMember = Messages div Members,
@@ -192,7 +200,7 @@ one_group_many_concurrent_sync_senders_members_exit() ->
     Time = element(1, timer:tc(Test)),
     report(Messages, 1, Members, Messages, 1, Time).
 
-many_groups_one_sync_sender_per_group() ->
+sync_send_many_groups_one_sender_per_group() ->
     Groups = 5000,
     Messages = 100000,
     MessagesPerGroup = Messages div Groups,
@@ -210,7 +218,7 @@ many_groups_one_sync_sender_per_group() ->
     Time = element(1, timer:tc(Test)),
     report(Messages, Groups, Groups, Groups, 1, Time).
 
-many_groups_many_concurrent_sync_senders() ->
+sync_send_many_groups_many_senders() ->
     Groups = 5000,
     Messages = 100000,
     MessagesPerGroup = Messages div Groups,
@@ -233,7 +241,7 @@ many_groups_many_concurrent_sync_senders() ->
     Time = element(1, timer:tc(Test)),
     report(Messages, Groups, Groups, Messages, 1, Time).
 
-one_group_limited_concurrent_sync_senders_distributed_setup() ->
+sync_send_one_group_few_senders_distributed_setup() ->
     process_flag(trap_exit, true),
 
     {ok, Slave1} = slave_setup(slave1),
@@ -268,7 +276,7 @@ one_group_limited_concurrent_sync_senders_distributed_setup() ->
     Time = element(1, timer:tc(Test)),
     report(Messages, 1, NumNodes, Senders, NumNodes, Time).
 
-one_group_many_concurrent_sync_senders_distributed_setup() ->
+sync_send_one_group_many_senders_distributed_setup() ->
     process_flag(trap_exit, true),
 
     {ok, Slave1} = slave_setup(slave1),
@@ -300,7 +308,7 @@ one_group_many_concurrent_sync_senders_distributed_setup() ->
     Time = element(1, timer:tc(Test)),
     report(Messages, 1, NumNodes, Messages, NumNodes, Time).
 
-many_groups_many_concurrent_sync_senders_distributed_setup() ->
+sync_send_many_groups_many_senders_distributed_setup() ->
     process_flag(trap_exit, true),
 
     {ok, Slave1} = slave_setup(slave1),
@@ -349,6 +357,21 @@ many_groups_many_concurrent_sync_senders_distributed_setup() ->
     Time = element(1, timer:tc(Test)),
     report(Messages, Groups, Groups, Messages, NumNodes, Time).
 
+send_three_messages() ->
+    Messages = 3,
+
+    {S, SR} = lbm_pg_member:start(?GROUP, Messages),
+    receive {joined, S} -> ok end,
+    ?assertEqual(1, length(lbm_pg:members(?GROUP))),
+
+    ok = lbm_pg:info(),
+
+    send(?GROUP, send, Messages, []),
+
+    ok = lbm_pg:info(),
+
+    ?DOWN(SR, S).
+
 %%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
@@ -358,16 +381,20 @@ many_groups_many_concurrent_sync_senders_distributed_setup() ->
 %% sync send all terms in a tight loop
 %%------------------------------------------------------------------------------
 sender(Group, NumMessages, Options) ->
-    fun() ->
-            for(NumMessages,
-                fun(Term) ->
-                        ok = lbm_pg:sync_send(
-                               Group,
-                               lbm_pg_member:message(Term),
-                               ?TIMEOUT * 1000,
-                               Options)
-                end)
-    end.
+    fun() -> send(Group, sync_send, NumMessages, Options) end.
+
+%%------------------------------------------------------------------------------
+%% @private
+%%------------------------------------------------------------------------------
+send(Group, Function, NumMessages, Options) ->
+    for(NumMessages,
+        fun(Term) ->
+                ok = lbm_pg:Function(
+                       Group,
+                       lbm_pg_member:message(Term),
+                       ?TIMEOUT * 1000,
+                       Options)
+        end).
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -397,14 +424,14 @@ setup() ->
 -ifdef(DEBUG).
 setup_apps() ->
     application:load(sasl),
-    {ok, Apps} = application:ensure_all_started(lbm_pg),
+    {ok, Apps} = application:ensure_all_started(lbm_pg, permanent),
     Apps.
 -else.
 setup_apps() ->
     application:load(sasl),
     error_logger:tty(false),
     ok = application:set_env(sasl, sasl_error_logger, false),
-    {ok, Apps} = application:ensure_all_started(lbm_pg),
+    {ok, Apps} = application:ensure_all_started(lbm_pg, permanent),
     Apps.
 -endif.
 
