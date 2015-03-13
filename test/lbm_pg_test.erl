@@ -33,7 +33,7 @@
 -define(EXIT(Pid), receive {'EXIT', Pid, normal} -> ok end).
 -define(EXIT_FUN, fun(_) -> ?EXIT(_) end).
 
--define(TIMEOUT, 30).
+-define(TIMEOUT, 90).
 
 %%%=============================================================================
 %%% TESTS
@@ -414,7 +414,7 @@ for_loop(I, F, As, Acc) -> for_loop(I - 1, F, As, [apply(F, [I | As]) | Acc]).
 %%------------------------------------------------------------------------------
 setup() ->
     fun() ->
-            ok = distribute(master),
+            ok = distribute('master@localhost'),
             setup_apps()
     end.
 
@@ -461,7 +461,7 @@ distribute(Name) ->
 %% Start a slave node and setup its environment (code path, applications, ...).
 %%------------------------------------------------------------------------------
 slave_setup(Name) ->
-    {ok, Node} = slave:start_link(hostname(), Name),
+    {ok, Node} = slave:start_link(localhost, Name),
     true = lists:member(Node, nodes()),
     slave_setup_env(Node),
     {ok, Node}.
@@ -508,8 +508,3 @@ report(Messages, Groups, Members, Senders, Nodes, MicroSeconds) ->
           io_lib:write(Senders),
           io_lib:write(Nodes),
           MicroSeconds / 1000]).
-
-%%------------------------------------------------------------------------------
-%% @private
-%%------------------------------------------------------------------------------
-hostname() -> list_to_atom(element(2, inet:gethostname())).
