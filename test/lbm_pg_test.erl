@@ -450,7 +450,7 @@ teardown() ->
 %%------------------------------------------------------------------------------
 distribute(Name) ->
     os:cmd("epmd -daemon"),
-    case net_kernel:start([Name]) of
+    case net_kernel:start([Name, shortnames]) of
         {ok, _}                       -> ok;
         {error, {already_started, _}} -> ok;
         Error                         -> Error
