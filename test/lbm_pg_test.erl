@@ -441,6 +441,7 @@ setup_apps() ->
 teardown() ->
     fun(Apps) ->
             [application:stop(App) || App <- Apps],
+            [slave:stop(Slave) || Slave <- nodes()],
             error_logger:tty(true)
     end.
 
