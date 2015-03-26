@@ -80,10 +80,10 @@ send(Group, Message, Timeout, Options) ->
 info() ->
     Stats = wpool:stats(?MODULE),
     io:format("Async worker statistics:~n"),
-    NumWorkers = proplists:get_value(workers, Stats),
+    NumWorkers = proplists:get_value(size, Stats),
     io:format(" * ~w workers~n", [NumWorkers]),
     TotalQueueLen = proplists:get_value(total_message_queue_len, Stats),
-    io:format(" * ~w messges pending", [TotalQueueLen]).
+    io:format(" * ~w messges pending~n", [TotalQueueLen]).
 
 %%%=============================================================================
 %%% Internal API
