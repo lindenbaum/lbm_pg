@@ -21,10 +21,10 @@ For more information look at the comprehensive inline EDoc documentation.
 Dependencies
 ------------
 
-`lbm_pg` uses [worker_pool](https://github.com/lindenbaum/worker_pool) to pool
-worker processes for asynchronous sends. However, the dependencies of the
-`worker_pool` project are test only, which means you don't have to include them
-in your release.
+`lbm_pg` uses [worker_pool](https://github.com/inaka/worker_pool) to pool
+worker processes for asynchronous sends. Don't be afraid, the dependencies of
+the `worker_pool` project itself are test only. This means you don't have to
+include them in your release.
 
 Example
 -------
