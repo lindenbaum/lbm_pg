@@ -24,6 +24,7 @@
 
 -record(lbm_pg_member, {b :: lbm_pg:backend() | '_', p :: pid() | '_' | '$1'}).
 
--define(UPDATE_MSG(Ref, Name, Members), {lbm_pg, Ref, Name, Members}).
+-define(LBM_PG_UPDATE(Ref, Name, Members),
+        {lbm_pg, update, Ref, Name, Members}).
 
 -endif. %% lbm_pg_hrl_

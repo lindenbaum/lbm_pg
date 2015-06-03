@@ -101,7 +101,7 @@ members(Group, false) -> members_by_type(member, Group).
 %% Add a process to the processes waiting for members of a specific group.
 %% The process may report bad members along with the registration. The
 %% process will receive a message of the form
-%% `?UPDATE_MSG(reference(), lbm_pg:name(), [#lbm_pg_member{}])'
+%% `?LBM_PG_UPDATE(reference(), lbm_pg:name(), [#lbm_pg_member{}])'
 %% when new members are available. The reference contained in the message
 %% will be returned from this function call.
 %% @end
@@ -308,7 +308,7 @@ waiting_notify({Group, Members}, State = #state{waiting = Ws}) ->
 %%------------------------------------------------------------------------------
 waiting_notify_fun(Group, Members) ->
     fun(#waiting{pid = Pid, ref = Ref}) ->
-            Pid ! ?UPDATE_MSG(Ref, Group, Members)
+            Pid ! ?LBM_PG_UPDATE(Ref, Group, Members)
     end.
 
 %%------------------------------------------------------------------------------

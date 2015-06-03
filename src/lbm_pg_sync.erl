@@ -135,11 +135,11 @@ sync_send_loop([M | Ms], BadMs, Args = {Group, Msg, _, Opts}, Timeout) ->
 %%------------------------------------------------------------------------------
 wait(Group, UpdateRef, Timeout, TimerRef) ->
     receive
-        ?UPDATE_MSG(UpdateRef, Group, timeout) ->
+        ?LBM_PG_UPDATE(UpdateRef, Group, timeout) ->
             ok = lbm_pg_dist:del_waiting(Group, UpdateRef),
             ok = flush_updates(Group, UpdateRef),
             {error, timeout};
-        ?UPDATE_MSG(UpdateRef, Group, Subscribers) ->
+        ?LBM_PG_UPDATE(UpdateRef, Group, Subscribers) ->
             Time = cancel_timer(TimerRef, Timeout, Group, UpdateRef),
             {ok, {Subscribers, Time}}
     end.
@@ -150,7 +150,7 @@ wait(Group, UpdateRef, Timeout, TimerRef) ->
 %%------------------------------------------------------------------------------
 flush_updates(Group, UpdateRef) ->
     receive
-        ?UPDATE_MSG(UpdateRef, Group, _) ->
+        ?LBM_PG_UPDATE(UpdateRef, Group, _) ->
             flush_updates(Group, UpdateRef)
     after
         50 -> ok
@@ -162,7 +162,7 @@ flush_updates(Group, UpdateRef) ->
 %% infinity.
 %%------------------------------------------------------------------------------
 send_after(Timeout, Group, UpdateRef) when is_integer(Timeout) ->
-    erlang:send_after(Timeout, self(), ?UPDATE_MSG(UpdateRef, Group, timeout));
+    erlang:send_after(Timeout, self(), ?LBM_PG_UPDATE(UpdateRef, Group, timeout));
 send_after(infinity, _Group, _Ref) ->
     erlang:make_ref().
 
@@ -176,7 +176,7 @@ cancel_timer(TimerRef, Timeout, Group, UpdateRef) ->
     case erlang:cancel_timer(TimerRef) of
         false when is_integer(Timeout) ->
             %% cleanup the message queue in case timer was already delivered
-            receive ?UPDATE_MSG(UpdateRef, Group, _) -> 0 after 0 -> 0 end;
+            receive ?LBM_PG_UPDATE(UpdateRef, Group, _) -> 0 after 0 -> 0 end;
         false when Timeout =:= infinity ->
             Timeout;
         Time when is_integer(Time) ->
