@@ -44,5 +44,16 @@ handle_call(the_group_message, _From, State) ->
 
 Send a message to a group member from an arbitrary process:
 ```erlang
-the_answer = lbm_pg:sync_send(1337, the_group_message).
+TheAnswer = lbm_pg:sync_send(1337, the_group_message).
+```
+
+Send an asynchronous message to a group member with error feedback:
+```erlang
+ok = lbm_pg:send(1337, the_group_message, 100, [error_feedback]),
+%% NOTE: This is a bad example for error handling
+receive
+        ?LBM_PG_ERROR(1337, the_group_message, Reason) -> {error, Reason}
+after 1000 ->
+        ok
+end.
 ```

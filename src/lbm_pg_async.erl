@@ -68,7 +68,7 @@ spec(NumWorkers) ->
 %%------------------------------------------------------------------------------
 -spec send(lbm_pg:name(), term(), timeout(), [lbm_pg:send_option()]) -> ok.
 send(Group, Message, Timeout, Options) ->
-    Request = {send, os:timestamp(), Group, Message, Timeout, Options},
+    Request = {send, self(), os:timestamp(), Group, Message, Timeout, Options},
     wpool:cast(?MODULE, Request, best_worker).
 
 %%------------------------------------------------------------------------------
@@ -116,9 +116,15 @@ handle_call(_Request, _From, State) -> {reply, undef, State}.
 %%------------------------------------------------------------------------------
 %% @private
 %%------------------------------------------------------------------------------
-handle_cast({send, StartTimestamp, Group, Message, Timeout, Options}, State) ->
-    NewTimeout = lbm_pg_sync:remaining_millis(Timeout, StartTimestamp),
-    lbm_pg:sync_send(Group, Message, NewTimeout, Options),
+handle_cast({send, Sender, Start, Group, Message, Timeout, Options}, State) ->
+    Feedback = feedback_requested(Options),
+    NewTimeout = lbm_pg_sync:remaining_millis(Timeout, Start),
+    try
+        lbm_pg:sync_send(Group, Message, NewTimeout, Options)
+    catch
+        exit:Reason when Feedback ->
+            Sender ! ?LBM_PG_ERROR(Group, Message, Reason)
+    end,
     {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -137,3 +143,14 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 %% @private
 %%------------------------------------------------------------------------------
 terminate(_Reason, _State) -> ok.
+
+%%%=============================================================================
+%%% Internal functions
+%%%=============================================================================
+
+%%------------------------------------------------------------------------------
+%% @private
+%%------------------------------------------------------------------------------
+feedback_requested(Options) ->
+    lists:member(error_feedback, Options) orelse
+        application:get_env(lbm_pg, error_feedback, false).

@@ -57,7 +57,7 @@
 
 -type name()             :: any().
 -type backend()          :: gen_server | gen_fsm.
--type send_option()      :: no_wait | no_cache.
+-type send_option()      :: no_wait | no_cache | error_feedback.
 
 -export_type([name/0, backend/0, send_option/0]).
 
@@ -217,7 +217,8 @@ send(Group, Message) -> send(Group, Message, 5000).
 
 %%------------------------------------------------------------------------------
 %% @doc
-%% Similar to {@link send/4} with `Options' set to `[]'.
+%% Similar to {@link send/4} with `Options' set to `[]'. For a description of
+%% timeout refer to {@link send/4}.
 %% @end
 %%------------------------------------------------------------------------------
 -spec send(name(), term(), timeout()) -> ok.
@@ -228,10 +229,19 @@ send(Group, Message, Timeout) -> send(Group, Message, Timeout, []).
 %% Sends a message asynchronously to exactly one member of a group (if any).
 %% This does not block the calling process. However, {@link lbm_pg:sync_send/4}
 %% will be used under the hood with the specified arguments but the actual call
-%% is made from a worker process taken from a pool of workers. If the message
-%% cannot be delivered, the respective worker will exit (and be restarted).
-%% Thus, errors will not be visible to the implementation but can be observed,
-%% e.g. by viewing the applications crash log.
+%% is made from a worker process taken from a pool of workers. This should
+%% explain why there is a `Timeout' argument necessary for an asynchronous
+%% function.
+%%
+%% If the message cannot be delivered and the `error_feedback' option is given
+%% a message of the form ?LBM_PG_ERROR/3 will be sent back to the sending
+%% process asynchronously notifying about the failed send request. If the option
+%% is not specified and the message cannot be delivered, the respective worker
+%% will exit (and be restarted). In this case errors will not be visible to the
+%% implementation but can be observed, e.g. by viewing the applications log.
+%%
+%% The `error_feedback' can also be enabled globally by specifying
+%% `{error_feedback, true}' in the application environment.
 %%
 %% For a description of options and semantics see {@link sync_send/4}.
 %% @end

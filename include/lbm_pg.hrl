@@ -27,4 +27,7 @@
 -define(LBM_PG_UPDATE(Ref, Name, Members),
         {lbm_pg, update, Ref, Name, Members}).
 
+-define(LBM_PG_ERROR(Group, Message, Reason),
+        {lbm_pg, error, Group, Message, Reason}).
+
 -endif. %% lbm_pg_hrl_

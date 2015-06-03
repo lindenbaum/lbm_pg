@@ -23,6 +23,8 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-include("lbm_pg.hrl").
+
 -define(GROUP, group).
 
 -define(LOG(Fmt, Args), io:format(standard_error, Fmt, Args)).
@@ -58,7 +60,8 @@ all_test_() ->
       {timeout, ?TIMEOUT, {spawn, fun sync_send_one_group_few_senders_distributed_setup/0}},
       {timeout, ?TIMEOUT, {spawn, fun sync_send_one_group_many_senders_distributed_setup/0}},
       {timeout, ?TIMEOUT, {spawn, fun sync_send_many_groups_many_senders_distributed_setup/0}},
-      fun send_three_messages/0
+      fun send_three_messages/0,
+      fun send_with_error_feedback/0
      ]}.
 
 join_only() ->
@@ -371,6 +374,11 @@ send_three_messages() ->
     ok = lbm_pg:info(),
 
     ?DOWN(SR, S).
+
+send_with_error_feedback() ->
+    ?assertEqual(0, length(lbm_pg:members(?GROUP))),
+    ?assertEqual(ok, lbm_pg:send(?GROUP, msg, 100, [error_feedback])),
+    receive ?LBM_PG_ERROR(?GROUP, msg, _Reason) -> ok end.
 
 %%%=============================================================================
 %%% Internal functions
